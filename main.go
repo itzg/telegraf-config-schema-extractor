@@ -13,6 +13,19 @@ import (
 	"regexp"
 )
 
+type ConfigParam struct {
+	Name     string
+	Type     string
+	Examples []string `json:",omitempty"`
+}
+
+type ConfigGroup struct {
+	Description string
+	Params      map[string]*ConfigParam
+}
+
+type Schema map[string][]*ConfigGroup
+
 func main() {
 	if len(os.Args) != 2 {
 		log.Fatal("Expected only a single telegraf input plugin name")
@@ -29,22 +42,16 @@ func main() {
 	configSection := extractPluginConfigSection(plugin, configOutBytes)
 
 	groups := processConfigGroups(configSection)
-	groupsJson, err := json.Marshal(groups)
+
+	schema := make(Schema)
+	schema[plugin] = groups
+
+	schemaJson, err := json.Marshal(schema)
 	if err != nil {
-		log.Fatal("Failed to marshal groups", err)
+		log.Fatal("Failed to marshal schema", err)
 	}
 
-	fmt.Println(string(groupsJson))
-}
-
-type ConfigParam struct {
-	Name string
-	Type string
-}
-
-type ConfigGroup struct {
-	Description string
-	Params      []*ConfigParam
+	fmt.Println(string(schemaJson))
 }
 
 func processConfigGroups(configSection []byte) []*ConfigGroup {
@@ -54,7 +61,7 @@ func processConfigGroups(configSection []byte) []*ConfigGroup {
 	if err != nil {
 		log.Fatal("Failed to compile groupDesc regexp", err)
 	}
-	paramStartExp, err := regexp.Compile(`# ([[:word:]]+\s*=.+|\[.+?\])$`)
+	paramStartExp, err := regexp.Compile(`# ([[:word:]]+\s*=.+|\[.+?])$`)
 	if err != nil {
 		log.Fatal("Failed to compile paramStartExp regexp", err)
 	}
@@ -83,7 +90,7 @@ func processConfigGroups(configSection []byte) []*ConfigGroup {
 
 			if groupDesc == nil {
 				groupDesc = new(bytes.Buffer)
-				currentGroup = new(ConfigGroup)
+				currentGroup = NewConfigGroup()
 			} else {
 				groupDesc.WriteByte(' ')
 			}
@@ -124,6 +131,10 @@ func processConfigGroups(configSection []byte) []*ConfigGroup {
 	return groups
 }
 
+func NewConfigGroup() *ConfigGroup {
+	return &ConfigGroup{Params: make(map[string]*ConfigParam)}
+}
+
 func appendParamToGroup(paramContent *bytes.Buffer, group *ConfigGroup) {
 	table, err := toml.Parse(paramContent.Bytes())
 	if err != nil {
@@ -139,15 +150,18 @@ func appendParamToGroup(paramContent *bytes.Buffer, group *ConfigGroup) {
 	for key, entry := range table.Fields {
 		name := key
 		var paramType string
+		var example string
 
 		switch typedEntry := entry.(type) {
 
 		case *ast.KeyValue:
-			switch typedEntry.Value.(type) {
+			switch value := typedEntry.Value.(type) {
 			case *ast.String:
+				example = value.Value
 				paramType = "string"
 
 			case *ast.Boolean:
+				example = value.Value
 				paramType = "boolean"
 
 			default:
@@ -160,8 +174,17 @@ func appendParamToGroup(paramContent *bytes.Buffer, group *ConfigGroup) {
 			name = deepestTableName(typedEntry)
 		}
 
-		param := &ConfigParam{Name: name, Type: paramType}
-		group.Params = append(group.Params, param)
+		if previous, exists := group.Params[name]; exists {
+			if example != "" {
+				previous.Examples = append(previous.Examples, example)
+			}
+		} else {
+			param := &ConfigParam{Name: name, Type: paramType}
+			if example != "" {
+				param.Examples = []string{example}
+			}
+			group.Params[name] = param
+		}
 
 		return
 	}
