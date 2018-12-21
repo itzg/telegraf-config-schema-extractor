@@ -1,2 +1,4 @@
 /*.iml
 /.idea/
+/telegraf-config-schema-extractor
+/telegraf-config-schema-extractor.exe
